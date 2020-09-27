@@ -1,0 +1,121 @@
+---
+title: "Practical Machine Learning Course Project"
+author: "Tfvip2008"
+date: "26 Sep 2020"
+output: html_document
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE, fig.width = 10, fig.height = 5, tidy.opts=list(width.cutoff=55), tidy=TRUE)
+```
+
+## Introduction
+
+One thing that people regularly do is to quantify how much of a particular activity they do, but they rarely quantify how well they do it. The goal of this project is to use data from different devices to predict how well people do exercises. Participants were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information can be found [here](http://web.archive.org/web/20161224072740/http:/groupware.les.inf.puc-rio.br/har).
+
+
+## Data Cleansing
+
+First, let's load the data and have an overview of the data.
+```{r}
+# load the data
+train_url <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+test_url <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+
+if(!file.exists("pml-training.csv")) {
+    download.file(train_url, "pml-training.csv", method = "curl")
+}
+
+if(!file.exists("pml-testing.csv")) {
+    download.file(test_url, "pml-testing.csv", method = "curl")
+}
+
+train_raw <- read.csv("pml-training.csv", header = TRUE, na.strings = c("NA", ""))
+test_raw <- read.csv("pml-testing.csv", header = TRUE, na.strings = c("NA", ""))
+```
+
+There are many columns with all "NA", these predictors are not able to provide any information. Some variables, like user name, timestamp, window etc. are not likely to be valid predictors. So it's better to exclude them in the training data. 
+
+```{r}
+library(caret)
+# count the missing value percentage of the data
+na_pct <- sapply(train_raw, function (x) {sum(is.na(x))/length(x)})
+table(na_pct) # there are 100 variables with na_pct equal 100
+col_sub <- colnames(train_raw)[na_pct == 0]
+
+# only keep variables with valid values
+train_sub <- train_raw[, col_sub]
+
+# variable like user_name, timestamp, window does not have much information
+train_sub <- train_sub[, 8:60]
+
+test_sub <- test_raw[, colnames(test_raw) %in% colnames(train_sub)] # 52 sub
+
+# some variables may do not have much variation
+# nzv <- nearZeroVar(train_sub) # does not have any results
+```
+
+Check correlation between predictors and the outcome, and correlation between predictors themselves. Exclude columns of high correlation with the outcome or between themselves. Use the PCA preprocessing to extract principal components.
+
+```{r, cache = TRUE}
+# check whether some variables have high correlation with the outcome
+classIndex <- which(colnames(train_sub) == "classe")
+
+# check correlation between predictors and outcome
+# correlations <- cor(train_train[, -classIndex], as.numeric(as.factor(train_train$classe)))
+# summary(abs(correlations)) # the max value is only 0.3449
+
+# check correlation between predictors, exclude them in the training data
+corrMatrix <- cor(train_sub[, -classIndex])
+highcorr <- findCorrelation(corrMatrix, cutoff=0.9, exact=TRUE)
+
+# use the PCA preProcessing to choose principal components
+pcaPrep <- preProcess(train_sub[, -c(highcorr, classIndex)], method = "pca", thresh = 0.99)
+
+train_pca <- predict(pcaPrep, train_sub[, -c(highcorr, classIndex)])
+
+test_pca <- predict(pcaPrep, test_sub[, -highcorr])
+
+train_pca$classe <- train_sub$classe
+```
+
+
+## Build the Model
+
+Use the random forest algorithm and 5-fold cross validation to train the model.
+
+```{r, cache = TRUE}
+
+set.seed(1234)
+
+train_control <- trainControl(method = "cv", number = 5)
+modfit <- train(classe ~ ., data = train_pca, method = "rf", trControl = train_control)
+confusionMatrix(modfit)
+
+```
+
+## Model Accuracy
+
+Output the accuracy in the training data.
+
+```{r, cache = TRUE}
+pred_train <- predict(modfit, train_pca, type="raw")
+c <- confusionMatrix(pred_train, as.factor(train_pca$classe))
+paste("Accuracy for the training data is:", c[["overall"]][["Accuracy"]])
+
+```
+
+## Conclusion
+
+Use the trained model to predict outcome in the testing data.
+
+```{r}
+# output the prediction for test data
+
+pred_test <- predict(modfit, test_pca, type = "raw")
+
+print("The prediction for the 20 cases in the test data is:")
+
+write.table(t(data.frame(pred_test)), row.names = FALSE, col.names = FALSE, sep = " ", quote = FALSE)
+
+```
